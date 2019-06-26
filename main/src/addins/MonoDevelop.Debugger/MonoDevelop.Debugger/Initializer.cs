@@ -26,12 +26,14 @@
 //
 
 using System;
+using System.Text.RegularExpressions;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.Components.Commands;
 using Mono.Debugging.Client;
 using MonoDevelop.Ide.Commands;
 using MonoDevelop.Core;
 using MonoDevelop.Ide;
+using System.Net;
 
 namespace MonoDevelop.Debugger
 {
@@ -63,12 +65,13 @@ namespace MonoDevelop.Debugger
 		{
 			if (disassemblyDoc != null && DebuggingService.IsFeatureSupported (DebuggerFeatures.Disassembly))
 				disassemblyView.Update ();
-			
+		
 			var frame = DebuggingService.CurrentFrame;
 			if (frame == null)
 				return;
 			
 			FilePath file = frame.SourceLocation.FileName;
+
 			int line = frame.SourceLocation.Line;
 			if (line != -1) {
 				if (!file.IsNullOrEmpty && System.IO.File.Exists (file)) {
@@ -81,6 +84,26 @@ namespace MonoDevelop.Debugger
 					if (newFilePath != null) {
 						frame.UpdateSourceFile (newFilePath);
 						var doc = await IdeApp.Workbench.OpenDocument (newFilePath, null, line, 1, OpenDocumentOptions.Debugger);
+						if (doc != null)
+							return;
+					}
+
+					if (frame.SourceLocation.SourceLink != null) {
+						// input, pattern, replacement
+
+						// Replace something like "f:/build/*" with "https://raw.githubusercontent.com/my-org/my-project/1111111111111111111111111111111111111111/*"
+						var pattern = frame.SourceLocation.SourceLink.From.Replace ("*", "");
+						var replacement = frame.SourceLocation.SourceLink.To.Replace ("*", "");
+						var httpPath = Regex.Replace (frame.SourceLocation.FileName, pattern, replacement);
+						var localPath = frame.SourceLocation.FileName.Replace (pattern.Replace(".*", ""), "");
+						FilePath tempLocation = "/Users/jason/temp";
+						var saveTo = tempLocation.Combine (localPath);
+						System.IO.Directory.CreateDirectory (saveTo.ParentDirectory);
+						var client = new WebClient ();
+						await client.DownloadFileTaskAsync (httpPath, saveTo);
+
+						frame.UpdateSourceFile (saveTo);
+						var doc = await IdeApp.Workbench.OpenDocument (saveTo, null, line, 1, OpenDocumentOptions.Debugger);
 						if (doc != null)
 							return;
 					}
@@ -142,12 +165,14 @@ namespace MonoDevelop.Debugger
 			if (bt != null) {
 				for (int n = 0; n < bt.FrameCount; n++) {
 					StackFrame sf = bt.GetFrame (n);
+
 					if (!sf.IsExternalCode &&
 					    sf.SourceLocation.Line != -1 &&
 					    !string.IsNullOrEmpty (sf.SourceLocation.FileName) &&
 					    //Uncomment condition below once logic for ProjectOnlyCode in runtime is fixed
 					    (/*DebuggingService.CurrentSessionSupportsFeature (DebuggerFeatures.Disassembly) ||*/
-					        System.IO.File.Exists (sf.SourceLocation.FileName) ||
+
+							System.IO.File.Exists (sf.SourceLocation.FileName) ||
 					        SourceCodeLookup.FindSourceFile (sf.SourceLocation.FileName, sf.SourceLocation.FileHash).IsNotNull)) {
 						if (n != DebuggingService.CurrentFrameIndex)
 							DebuggingService.CurrentFrameIndex = n;
