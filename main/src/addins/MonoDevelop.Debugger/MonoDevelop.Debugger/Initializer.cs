@@ -26,14 +26,13 @@
 //
 
 using System;
-using System.Text.RegularExpressions;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.Components.Commands;
 using Mono.Debugging.Client;
 using MonoDevelop.Ide.Commands;
 using MonoDevelop.Core;
 using MonoDevelop.Ide;
-using System.Net;
+using System.IO;
 
 namespace MonoDevelop.Debugger
 {
@@ -43,7 +42,8 @@ namespace MonoDevelop.Debugger
 		DisassemblyView disassemblyView;
 		Document noSourceDoc;
 		NoSourceView noSourceView;
-		
+		string symbolCachePath;
+
 		protected override void Run ()
 		{
 			DebuggingService.CallStackChanged += OnStackChanged;
@@ -51,6 +51,7 @@ namespace MonoDevelop.Debugger
 			DebuggingService.DisassemblyRequested += OnShowDisassembly;
 
 			IdeApp.CommandService.RegisterGlobalHandler (new GlobalRunMethodHandler ());
+			symbolCachePath = UserProfile.Current.CacheDir.Combine ("Symbols");
 		}
 
 		void OnStackChanged (object s, EventArgs a)
@@ -74,7 +75,7 @@ namespace MonoDevelop.Debugger
 
 			int line = frame.SourceLocation.Line;
 			if (line != -1) {
-				if (!file.IsNullOrEmpty && System.IO.File.Exists (file)) {
+				if (!file.IsNullOrEmpty && File.Exists (file)) {
 					var doc = await IdeApp.Workbench.OpenDocument (file, null, line, 1, OpenDocumentOptions.Debugger);
 					if (doc != null)
 						return;
@@ -89,19 +90,7 @@ namespace MonoDevelop.Debugger
 					}
 
 					if (frame.SourceLocation.SourceLink != null) {
-						// input, pattern, replacement
-
-						// Replace something like "f:/build/*" with "https://raw.githubusercontent.com/my-org/my-project/1111111111111111111111111111111111111111/*"
-						var pattern = frame.SourceLocation.SourceLink.From.Replace ("*", "");
-						var replacement = frame.SourceLocation.SourceLink.To.Replace ("*", "");
-						var httpPath = Regex.Replace (frame.SourceLocation.FileName, pattern, replacement);
-						var localPath = frame.SourceLocation.FileName.Replace (pattern.Replace(".*", ""), "");
-						FilePath tempLocation = "/Users/jason/temp";
-						var saveTo = tempLocation.Combine (localPath);
-						System.IO.Directory.CreateDirectory (saveTo.ParentDirectory);
-						var client = new WebClient ();
-						await client.DownloadFileTaskAsync (httpPath, saveTo);
-
+						var saveTo = await frame.SourceLocation.SourceLink.DownloadFile (frame.SourceLocation.FileName, symbolCachePath);
 						frame.UpdateSourceFile (saveTo);
 						var doc = await IdeApp.Workbench.OpenDocument (saveTo, null, line, 1, OpenDocumentOptions.Debugger);
 						if (doc != null)
@@ -172,7 +161,8 @@ namespace MonoDevelop.Debugger
 					    //Uncomment condition below once logic for ProjectOnlyCode in runtime is fixed
 					    (/*DebuggingService.CurrentSessionSupportsFeature (DebuggerFeatures.Disassembly) ||*/
 
-							System.IO.File.Exists (sf.SourceLocation.FileName) ||
+						    sf.SourceLocation.SourceLink != null ||
+							File.Exists (sf.SourceLocation.FileName) ||
 					        SourceCodeLookup.FindSourceFile (sf.SourceLocation.FileName, sf.SourceLocation.FileHash).IsNotNull)) {
 						if (n != DebuggingService.CurrentFrameIndex)
 							DebuggingService.CurrentFrameIndex = n;
